@@ -25,9 +25,9 @@ impl Tabs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode { Normal, Insert }
 
-// NEW: which input field we are editing in Insert mode
+// Focusable fields in Insert mode (Tab cycles through these)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertField { Title, Notes }
+pub enum InsertField { Title, Notes, Time, Priority }
 
 /// Central TUI state
 pub struct App {
@@ -40,6 +40,7 @@ pub struct App {
     pub draft_title: String,
     pub draft_priority: i8,
     pub draft_notes: String,
+    pub draft_timeframe: String,
 
     pub status_line: String,
     pub dirty: bool,
@@ -51,6 +52,9 @@ pub struct App {
     pub progress: f64, // 0..1 wave
     pub pulse: f64,    // 0..tau loop
     pub spark_points: Vec<u64>,
+
+    // inline expansion in Todos tab
+    pub expanded: bool,
 }
 
 impl App {
@@ -63,17 +67,20 @@ impl App {
             draft_title: String::new(),
             draft_priority: 1,
             draft_notes: String::new(),
+            draft_timeframe: String::new(),
             status_line: String::new(),
             dirty: false,
 
-            // NEW: add "Details" tab
-            tabs: Tabs::new(vec!["Todos", "Dash", "World", "Details"]),
+            // Details tab removed; inline expansion instead
+            tabs: Tabs::new(vec!["Todos", "Dash", "World"]),
             show_chart: true,
             enhanced_graphics: true,
 
             progress: 0.0,
             pulse: 0.0,
             spark_points: vec![0; 60],
+
+            expanded: false,
         }
     }
 

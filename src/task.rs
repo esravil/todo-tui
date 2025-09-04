@@ -13,6 +13,7 @@ pub struct Task {
     pub id: String,
     pub title: String,
     pub notes: Option<String>,
+    pub timeframe: Option<String>, // NEW: optional human-readable time/timeframe
     pub priority: i8,
     pub status: Status,
     pub created_at: i64, // unix seconds
@@ -31,7 +32,8 @@ impl Task {
             id,
             title,
             notes,
-            priority,
+            timeframe: None,                  // NEW default
+            priority: priority.clamp(1, 5),   // keep within 1..=5
             status: Status::Pending,
             created_at: now,
         }

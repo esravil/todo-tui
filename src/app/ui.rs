@@ -1,7 +1,7 @@
 use ratatui::{
     prelude::*,
     widgets::{
-        Block, Borders, Tabs, Paragraph, Wrap, List, ListItem, BarChart, Gauge, LineGauge, Clear,
+        Block, Borders, Tabs, Paragraph, Wrap, BarChart, Gauge, LineGauge, Clear, Table, Row, Cell,
         canvas::{Canvas, Map, MapResolution, Line as CanvasLine},
     },
     text::{Span, Line as TextLine},
@@ -43,12 +43,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .highlight_style(Style::default().fg(Color::Yellow));
     frame.render_widget(tabs, outer[0]);
 
-    // Main content by tab
+    // Main content by tab (Details tab removed)
     match app.tabs.index {
         0 => draw_todos(frame, app, outer[1]),
         1 => draw_dash(frame, app, outer[1]),
         2 => draw_world(frame, app, outer[1]),
-        3 => draw_details(frame, app, outer[1]),
         _ => {}
     }
 
@@ -59,48 +58,78 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 // =================== TAB 0: TODOS ==========================================
+// =================== TAB 0: TODOS ==========================================
 fn draw_todos(frame: &mut Frame, app: &App, area: Rect) {
+    // If expanded, reserve taller footer; else compact status
+    let footer_h = if app.expanded { 7 } else { 3 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)].as_ref())
+        .constraints([Constraint::Min(1), Constraint::Length(footer_h)].as_ref())
         .split(area);
 
+    // Build rows for Table with two columns: [P#] title | timeframe
     let visible = app.visible_indices();
-    let items: Vec<ListItem> = visible
-        .iter()
-        .map(|&idx| {
-            let t = &app.list.items[idx];
-            let p = Span::styled(
-                format!("[P{}] ", t.priority),
-                Style::default().add_modifier(Modifier::BOLD),
-            );
-            let style = if t.status == Status::Done {
-                Style::default()
-                    .fg(Color::Gray)
-                    .add_modifier(Modifier::CROSSED_OUT)
-            } else {
-                Style::default()
-            };
-            let title = Span::styled(t.title.clone(), style);
-            ListItem::new(TextLine::from(vec![p, title]))
-        })
-        .collect();
+    let mut rows: Vec<Row> = Vec::with_capacity(visible.len());
+    for (list_row, &idx) in visible.iter().enumerate() {
+        let t = &app.list.items[idx];
+        let left = format!("[P{}] {}", t.priority, t.title);
+        let right = t.timeframe.as_deref().unwrap_or("—");
+        let mut row = Row::new(vec![
+            Cell::from(left),
+            Cell::from(Span::styled(right.to_string(), Style::default().fg(Color::Gray))),
+        ]);
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Todos"))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
-        .highlight_symbol("▶ ");
-
-    let mut state = ratatui::widgets::ListState::default();
-    if !visible.is_empty() {
-        state.select(Some(app.selected));
+        // highlight selected row in yellow
+        if list_row == app.selected {
+            row = row.style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        } else if t.status == Status::Done {
+            row = row.style(Style::default().fg(Color::DarkGray));
+        }
+        rows.push(row);
     }
-    frame.render_stateful_widget(list, chunks[0], &mut state);
 
-    if matches!(app.input_mode, InputMode::Normal) {
+    // ---- Auto-scroll logic ----
+    // Approximate how many table body rows fit:
+    // subtract 2 for the top/bottom borders of the table block.
+    let viewport_rows = chunks[0].height.saturating_sub(2) as usize;
+
+    // If nothing or tiny viewport, just render what we have.
+    let (start, end) = if viewport_rows == 0 || rows.is_empty() {
+        (0, rows.len())
+    } else {
+        // Keep the selected row visible by shifting the "window start"
+        // so that selected is within [start, start + viewport_rows - 1].
+        // This anchors the selection near the bottom when scrolling down.
+        let max_start = rows.len().saturating_sub(viewport_rows);
+        let mut start = if app.selected >= viewport_rows {
+            app.selected + 1 - viewport_rows
+        } else {
+            0
+        };
+        if start > max_start {
+            start = max_start;
+        }
+        let end = (start + viewport_rows).min(rows.len());
+        (start, end)
+    };
+
+    // Table::new expects (rows, columns) in your ratatui version.
+    let table = Table::new(
+        rows[start..end].to_vec(),
+        [Constraint::Percentage(70), Constraint::Percentage(30)],
+    )
+    .block(Block::default().borders(Borders::ALL).title("Todos"))
+    .column_spacing(2);
+
+    frame.render_widget(table, chunks[0]);
+
+    // Footer: status (and expanded details if toggled)
+    if app.expanded {
+        draw_expanded_details(frame, app, chunks[1]);
+    } else {
         let help = Paragraph::new(vec![
-            TextLine::from("q quit | a add | space toggle | d delete | ↑/↓ move | s save"),
-            TextLine::from("Tabs: h/l or ←/→ or [Tab] | t toggle chart | g graphics | Details tab shows notes"),
+            TextLine::from("q quit | a add | Enter toggle done | d delete | ↑/↓ move | s save"),
+            TextLine::from("Space expand/collapse | Tabs: h/l or ←/→ or [Tab] | t toggle chart | g graphics"),
             TextLine::from(format!("Status: {}", app.status_line)),
         ])
         .wrap(Wrap { trim: true })
@@ -109,25 +138,53 @@ fn draw_todos(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+// expanded panel under the list
+fn draw_expanded_details(frame: &mut Frame, app: &App, area: Rect) {
+    let mut lines: Vec<TextLine> = Vec::new();
+    if let Some(idx) = app.visible_indices().get(app.selected).cloned() {
+        let t = &app.list.items[idx];
+        lines.push(TextLine::from(Span::styled(
+            "Details",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(TextLine::from(format!("Title: {}", t.title)));
+        lines.push(TextLine::from(format!("Priority: {}", t.priority)));
+        lines.push(TextLine::from(format!("Status: {:?}", t.status)));
+        lines.push(TextLine::from(format!(
+            "Timeframe: {}",
+            t.timeframe.as_deref().unwrap_or("<none>")
+        )));
+        lines.push(TextLine::from("Notes:"));
+        lines.push(TextLine::from(
+            t.notes.clone().unwrap_or_else(|| "<none>".to_string()),
+        ));
+    } else {
+        lines.push(TextLine::from("No task selected."));
+    }
+    let p = Paragraph::new(lines)
+        .wrap(Wrap { trim: true })
+        .block(Block::default().borders(Borders::ALL).title("Expanded"));
+    frame.render_widget(p, area);
+}
+
 // =================== INSERT OVERLAY ========================================
 fn draw_insert_overlay(frame: &mut Frame, app: &App, content_area: Rect) {
-    // 3 content lines (Title, Notes, Priority) => box height 5 incl. borders
-    let box_height = 5;
+    // 4 content lines (Title, Notes, Timeframe, Priority) => box height 6 incl. borders
+    let box_height = 6;
     let box_width = content_area.width.saturating_sub(4);
     let x = content_area.x + 2;
     let y = content_area.y + content_area.height.saturating_sub(box_height + 1);
 
     let rect = Rect { x, y, width: box_width, height: box_height };
 
-    // Blink caret
+    // Blink caret for text fields
     let caret_visible = app.pulse.sin() > 0.0;
     let caret = if caret_visible { "▏" } else { " " };
 
-    // Active field highlight
     let label_active = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
     let label_inactive = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
 
-    // Title line
+    // Title
     let title_label_style = if matches!(app.insert_field, InsertField::Title) { label_active } else { label_inactive };
     let title_span = if app.draft_title.is_empty() {
         Span::styled("<type a title>", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
@@ -140,7 +197,7 @@ fn draw_insert_overlay(frame: &mut Frame, app: &App, content_area: Rect) {
         if matches!(app.insert_field, InsertField::Title) { Span::raw(caret) } else { Span::raw("") },
     ]);
 
-    // Notes line
+    // Notes
     let notes_label_style = if matches!(app.insert_field, InsertField::Notes) { label_active } else { label_inactive };
     let notes_span = if app.draft_notes.is_empty() {
         Span::styled("<add optional notes>", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
@@ -153,22 +210,44 @@ fn draw_insert_overlay(frame: &mut Frame, app: &App, content_area: Rect) {
         if matches!(app.insert_field, InsertField::Notes) { Span::raw(caret) } else { Span::raw("") },
     ]);
 
-    // Priority line
-    let mut prio_spans: Vec<Span> = vec![Span::styled("Priority: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
+    // Timeframe
+    let tf_label_style = if matches!(app.insert_field, InsertField::Time) { label_active } else { label_inactive };
+    let tf_span = if app.draft_timeframe.is_empty() {
+        Span::styled("<e.g. Today 3–5pm | 2025-09-10 09:00>", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))
+    } else {
+        Span::raw(app.draft_timeframe.clone())
+    };
+    let tf_line = TextLine::from(vec![
+        Span::styled("Time:  ", tf_label_style),
+        tf_span,
+        if matches!(app.insert_field, InsertField::Time) { Span::raw(caret) } else { Span::raw("") },
+    ]);
+
+    // Priority (focusable; arrows adjust)
+    let prio_label_style = if matches!(app.insert_field, InsertField::Priority) { label_active } else { label_inactive };
+    let mut prio_spans: Vec<Span> = vec![Span::styled("Priority: ", prio_label_style)];
     for n in 1..=5 {
-        let active = n == app.draft_priority;
+        let active_num = n == app.draft_priority;
         prio_spans.push(Span::styled(
-            if active { format!("[{}]", n) } else { format!(" {} ", n) },
-            if active { Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) },
+            if active_num { format!("[{}]", n) } else { format!(" {} ", n) },
+            if active_num {
+                let mut s = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+                if matches!(app.insert_field, InsertField::Priority) {
+                    s = s.add_modifier(Modifier::REVERSED);
+                }
+                s
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
         ));
         if n != 5 { prio_spans.push(Span::raw(" ")); }
     }
     prio_spans.push(Span::raw("   "));
-    prio_spans.push(Span::styled("[Ctrl+1–5 set] [Tab switch] [Enter add] [Esc cancel]", Style::default().fg(Color::Gray)));
+    prio_spans.push(Span::styled("[←/→ adjust] [Tab switch] [Enter add] [Esc]", Style::default().fg(Color::Gray)));
     let prio_line = TextLine::from(prio_spans);
 
     frame.render_widget(Clear, rect);
-    let panel = Paragraph::new(vec![title_line, notes_line, prio_line])
+    let panel = Paragraph::new(vec![title_line, notes_line, tf_line, prio_line])
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title("Add Task"));
     frame.render_widget(panel, rect);
@@ -263,28 +342,4 @@ fn draw_world(frame: &mut Frame, app: &App, area: Rect) {
         });
 
     frame.render_widget(canvas, area);
-}
-
-// =================== TAB 3: DETAILS ========================================
-fn draw_details(frame: &mut Frame, app: &App, area: Rect) {
-    let mut lines: Vec<TextLine> = Vec::new();
-    if let Some(idx) = app.visible_indices().get(app.selected).cloned() {
-        let t = &app.list.items[idx];
-        lines.push(TextLine::from(Span::styled("Task Details", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
-        lines.push(TextLine::from(""));
-        lines.push(TextLine::from(format!("Title: {}", t.title)));
-        lines.push(TextLine::from(format!("Priority: {}", t.priority)));
-        lines.push(TextLine::from(format!("Status: {:?}", t.status)));
-        lines.push(TextLine::from(""));
-        lines.push(TextLine::from("Notes:"));
-        let notes = t.notes.clone().unwrap_or_else(|| "<none>".to_string());
-        lines.push(TextLine::from(notes));
-    } else {
-        lines.push(TextLine::from("No task selected."));
-    }
-
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("Details"));
-    frame.render_widget(p, area);
 }
