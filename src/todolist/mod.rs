@@ -10,7 +10,7 @@ pub struct TodoList {
 impl TodoList {
     pub fn add(&mut self, title: &str, priority: i8, notes: Option<String>) {
         self.items.push(Task::new(title, priority, notes));
-        self.sort();
+        // self.sort();
     }
 
     pub fn delete_index(&mut self, idx: usize) -> bool {
