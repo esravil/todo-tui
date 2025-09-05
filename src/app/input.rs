@@ -1,5 +1,5 @@
 use crossterm::event::{Event, KeyCode, KeyEvent};
-use crate::app::{App, InputMode, InsertField};
+use crate::app::{App, InputMode, InsertField, MapView};
 
 pub fn handle_event(app: &mut App, ev: Event) -> bool {
     match ev {
@@ -58,6 +58,15 @@ fn handle_normal_mode(app: &mut App, code: KeyCode) -> bool {
 
         // Save marker
         KeyCode::Char('s') => { app.status_line = "Saved ✓".into(); app.dirty = true; }
+
+        // Map view toggle (World <-> NYC)
+        KeyCode::Char('m') => {
+            app.map_view = match app.map_view {
+                MapView::World => MapView::NYC,
+                MapView::NYC => MapView::World,
+            };
+            app.status_line = format!("Map view: {}", match app.map_view { MapView::World => "World", MapView::NYC => "NYC" });
+        }
 
         // tabs + visuals
         KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.tabs.next(),
